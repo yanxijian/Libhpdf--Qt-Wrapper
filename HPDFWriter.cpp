@@ -1,6 +1,87 @@
 ﻿#include "HPDFWriter.h"
 #pragma comment(lib, "./lib/libhpdf.lib")
 
+// Get system font file path
+std::string GetSystemFontFile(const std::wstring &faceName)
+{
+	static const LPWSTR fontRegistryPath = L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts";
+	HKEY hKey;
+	LONG result;
+
+	// Open Windows font registry key
+	result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, fontRegistryPath, 0, KEY_READ, &hKey);
+	if (result != ERROR_SUCCESS)
+	{
+		return "";
+	}
+
+	DWORD maxValueNameSize, maxValueDataSize;
+	result = RegQueryInfoKey(hKey, 0, 0, 0, 0, 0, 0, 0, &maxValueNameSize, &maxValueDataSize, 0, 0);
+	if (result != ERROR_SUCCESS)
+	{
+		return "";
+	}
+
+	DWORD valueIndex = 0;
+	LPWSTR valueName = new WCHAR[maxValueNameSize];
+	LPBYTE valueData = new BYTE[maxValueDataSize];
+	DWORD valueNameSize, valueDataSize, valueType;
+	std::wstring wsFontFile;
+
+	// Look for a matching font name
+	do
+	{
+		wsFontFile.clear();
+		valueDataSize = maxValueDataSize;
+		valueNameSize = maxValueNameSize;
+
+		result = RegEnumValue(hKey, valueIndex, valueName, &valueNameSize, 0, &valueType, valueData, &valueDataSize);
+		valueIndex++;
+
+		if (result != ERROR_SUCCESS || valueType != REG_SZ)
+		{
+			continue;
+		}
+
+		std::wstring wsValueName(valueName, valueNameSize);
+
+		// 一个TTF/TTC可能有多种字体
+		if (wsValueName.find(faceName) != std::wstring::npos)
+		{
+			// valueData可能有多个\0，如果用assign等方式，可能会多拷贝\0
+			wsFontFile = reinterpret_cast<LPWSTR>(valueData);
+			break;
+		}
+	} while (result != ERROR_NO_MORE_ITEMS);
+
+	delete[] valueName;
+	delete[] valueData;
+
+	RegCloseKey(hKey);
+
+	if (wsFontFile.empty())
+	{
+		return "";
+	}
+
+	// Build full font file path
+	WCHAR winDir[MAX_PATH];
+	GetWindowsDirectory(winDir, MAX_PATH);
+
+	std::wstringstream ss;
+	ss << winDir << "\\Fonts\\" << wsFontFile;
+	wsFontFile = ss.str();
+
+	return std::string(wsFontFile.begin(), wsFontFile.end());
+}
+
+bool ends_with(std::string const & value, std::string const & ending)
+{
+	if (ending.size() > value.size()) return false;
+	//return ending == value.substr(value.size() - ending.size());
+	return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
+}
+
 jmp_buf env;
 
 void error_handler(HPDF_STATUS error_no, HPDF_STATUS detail_no, void *)
@@ -10,41 +91,53 @@ void error_handler(HPDF_STATUS error_no, HPDF_STATUS detail_no, void *)
 	longjmp(env, 1);
 }
 
-// Encodings related infomation：https://github.com/libharu/libharu/wiki/Encodings
-void HPDFWriter::setPDFLang(PDFLang lang)
+// Optional：https://github.com/libharu/libharu/wiki/Encodings
+void HPDFWriter::initPDFFont()
 {
-	m_lang = lang;
-	switch (lang)
+	string codecName = "UTF-8";
+	m_codecName = codecName;
+	HPDF_UseUTFEncodings(m_pdf);
+	
+	// Get System Default Font
+	NONCLIENTMETRICS im;
+	im.cbSize = sizeof(NONCLIENTMETRICS);
+	SystemParametersInfo(SPI_GETNONCLIENTMETRICS, im.cbSize, &im, 0);
+	std::string fPath = GetSystemFontFile(im.lfMenuFont.lfFaceName);
+
+	m_fName.clear();
+	if (!fPath.empty())
 	{
-		case PDFLang_SC:
+		fPath = strim(fPath);
+		const std::string sttf(".ttf");
+		const std::string sttc(".ttc");
+		if (ends_with(fPath, sttf))		// ttf font
 		{
-			m_fName = "SimSun";
-			HPDF_UseCNSFonts(m_pdf);
-			HPDF_UseCNSEncodings(m_pdf);
-
-			m_encoder = HPDF_GetEncoder(m_pdf, "GBK-EUC-H");
-			break;
+			m_fName = HPDF_LoadTTFontFromFile(m_pdf, fPath.c_str(), HPDF_TRUE);
 		}
-		case PDFLang_TC:
+		else if (ends_with(fPath, sttc))	// ttc font
 		{
-			m_fName = "MingLiU";
-			HPDF_UseCNTFonts(m_pdf);
-			HPDF_UseCNTEncodings(m_pdf);
-
-			m_encoder = HPDF_GetEncoder(m_pdf, "ETen-B5-H");
-			break;
-		}
-		case PDFLang_EN:	// English and default font
-		default:
-		{
-			m_lang = PDFLang_EN;
-			m_fName = "Courier";
-
-			m_encoder = HPDF_GetEncoder(m_pdf, "WinAnsiEncoding");
-			break;
+			m_fName = HPDF_LoadTTFontFromFile2(m_pdf, fPath.c_str(), 0, HPDF_TRUE);	// get firt font
 		}
 	}
-	m_font = HPDF_GetFont(m_pdf, m_fName.c_str(), m_encoder->name);
+	if (m_fName.empty())
+	{
+#ifndef ZHCN
+		// set SimSun
+		m_fName = "SimSun";
+		codecName = "GBK-EUC-H";
+		m_codecName = "GB18030";
+
+		HPDF_UseCNSFonts(m_pdf);
+		HPDF_UseCNSEncodings(m_pdf);
+#else
+		// set local font
+		m_fName = HPDF_LoadTTFontFromFile(m_pdf, QString(qApp->applicationDirPath() + "/fonts/segoeui.ttf").toLocal8Bit().constData(), HPDF_TRUE);
+#endif
+	}
+
+	HPDF_SetCurrentEncoder(m_pdf, codecName.c_str());
+	m_encoder = HPDF_GetEncoder(m_pdf, codecName.c_str());
+	m_font = HPDF_GetFont(m_pdf, m_fName.c_str(), codecName.c_str());
 }
 
 void HPDFWriter::saveToPDF(const QString& path)
@@ -52,8 +145,8 @@ void HPDFWriter::saveToPDF(const QString& path)
 	HPDF_Outline root;
 	HPDF_Destination dst;
 
-	/* Create bookmarks */
-	root = HPDF_CreateOutline(m_pdf, NULL, toLang(tr("目录")).c_str(), m_encoder);
+	/* Create bookmark */
+	root = HPDF_CreateOutline(m_pdf, NULL, toLang(tr("Bookmark")).c_str(), m_encoder);
 	HPDF_Outline_SetOpened(root, HPDF_TRUE);
 
 	int topSpace = m_pro.yedge;
@@ -95,8 +188,7 @@ void HPDFWriter::saveToPDF(const QString& path)
 			width = contentWidth(page, lines);
 			for (int cntLine = 0; cntLine < lines.size(); ++cntLine)
 			{
-				std::string line = toLang(lines.at(cntLine));
-				HPDF_Page_TextOutEx(page, m_pro.xedge, m_szPage.height() - topSpace, sContent.Align, line.c_str(), width);
+				HPDF_Page_TextOutEx(page, m_pro.xedge, m_szPage.height() - topSpace, sContent.Align, toLang(lines.at(cntLine)).c_str(), width);
 
 				// Not last line
 				if (cntLine < lines.size() - 1)
@@ -168,7 +260,7 @@ void HPDFWriter::saveToPDF(const QString& path)
 
 			if (-1 == file.write(reinterpret_cast<const char *>(buf), siz))
 			{
-				qDebug() << "Write PDF error";
+				qDebug() << "Message save as PDF error";
 				break;
 			}
 		}
@@ -202,27 +294,7 @@ void HPDFWriter::initPDF()
 
 std::string HPDFWriter::toLang(const QString& text) const
 {
-	std::string codecName;
-	switch (m_lang)
-	{
-		case PDFLang_SC:
-		{
-			codecName = "GB18030";
-			break;
-		}
-		case PDFLang_TC:
-		{
-			codecName = "Big5";
-			break;
-		}
-		case PDFLang_EN:
-		default:
-		{
-			codecName = QTextCodec::codecForLocale()->name().constData();
-			break;
-		}
-	}
-	QTextCodec *codec = QTextCodec::codecForName(codecName.c_str());
+	QTextCodec *codec = QTextCodec::codecForName(m_codecName.c_str());
 	return codec->fromUnicode(text).constData();
 }
 
@@ -231,7 +303,7 @@ int HPDFWriter::contentWidth(const HPDF_Page page, const QList<QString> &lines) 
 	int width = 0;
 	foreach(const QString &line, lines)
 	{
-		width = max(width, (int)HPDF_Page_TextWidth(page, line.toLocal8Bit().constData()));
+		width = qMax(width, (int)HPDF_Page_TextWidth(page, toLang(line).c_str()));
 	}
 	return  width;
 }
@@ -253,7 +325,11 @@ void HPDFWriter::HPDF_Page_TextOutEx(HPDF_Page page, int edge, int ypos, PDFText
 	{
 		xpos = pageWidth - width - edge;
 	}
-	HPDF_Page_TextOut(page, xpos, ypos, text);
+	// No line break. May be garbled
+	if (!QRegExp("[\r\n]").exactMatch(text))
+	{
+		HPDF_Page_TextOut(page, xpos, ypos, text);
+	}
 }
 
 QList<QString> HPDFWriter::wrapString(const QString& text, const QFont& font, int width, int minWord)
