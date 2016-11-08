@@ -45,10 +45,10 @@ std::string GetSystemFontFile(const std::wstring &faceName)
 
 		std::wstring wsValueName(valueName, valueNameSize);
 
-		// 一个TTF/TTC可能有多种字体
+		// TTC may contain multiple fonts
 		if (wsValueName.find(faceName) != std::wstring::npos)
 		{
-			// valueData可能有多个\0，如果用assign等方式，可能会多拷贝\0
+			// valueData may contain multiple fonts '\0', can't use assign
 			wsFontFile = reinterpret_cast<LPWSTR>(valueData);
 			break;
 		}
