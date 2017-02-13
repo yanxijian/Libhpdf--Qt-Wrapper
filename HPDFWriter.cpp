@@ -275,20 +275,23 @@ void HPDFWriter::saveToPDF(const QString& path)
 
 void HPDFWriter::initPDF()
 {
+	m_ret = -1;
 	m_pdf = HPDF_New(error_handler, NULL);
 	if (!m_pdf)
 	{
 		printf("error: cannot create PdfDoc object\n");
 		return;
 	}
-	m_ret = 0;
-	/* Set page mode to use outlines */
-	HPDF_SetPageMode(m_pdf, HPDF_PAGE_MODE_USE_OUTLINE);
 
 	if (setjmp(env))
 	{
-		m_ret = -1;
 		HPDF_Free(m_pdf);
+	}
+	else
+	{
+		/* Set page mode to use outlines */
+		HPDF_SetPageMode(m_pdf, HPDF_PAGE_MODE_USE_OUTLINE);
+		m_ret = 0;
 	}
 }
 
