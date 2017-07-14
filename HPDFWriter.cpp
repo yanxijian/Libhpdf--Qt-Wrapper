@@ -99,10 +99,13 @@ void HPDFWriter::initPDFFont()
 	HPDF_UseUTFEncodings(m_pdf);
 	
 	// Get System Default Font
-	NONCLIENTMETRICS im;
-	im.cbSize = sizeof(NONCLIENTMETRICS);
-	SystemParametersInfo(SPI_GETNONCLIENTMETRICS, im.cbSize, &im, 0);
-	std::string fPath = GetSystemFontFile(im.lfMenuFont.lfFaceName);
+	// NONCLIENTMETRICS im;
+	// im.cbSize = sizeof(NONCLIENTMETRICS);
+	// SystemParametersInfo(SPI_GETNONCLIENTMETRICS, im.cbSize, &im, 0);
+	
+	LOGFONT lf;
+	::GetObject(::GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
+	std::string fPath = GetSystemFontFile(lf.lfFaceName);
 
 	m_fName.clear();
 	if (!fPath.empty())
